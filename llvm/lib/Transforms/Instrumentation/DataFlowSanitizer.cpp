@@ -55,6 +55,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
@@ -90,9 +91,9 @@
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -415,6 +416,8 @@ class DataFlowSanitizer : public ModulePass {
   FunctionCallee DFSanStoreCallbackFn;
   FunctionCallee DFSanMemTransferCallbackFn;
   FunctionCallee DFSanConditionalCallbackFn;
+  FunctionCallee DFSanForwardEdgeCallbackFn;
+  FunctionCallee DFSanBackEdgeCallbackFn;
   FunctionCallee DFSanCmpCallbackFn;
   MDNode *ColdCallWeights;
 
@@ -504,13 +507,16 @@ struct DFSanFunction {
   // If ClConditionalCallbacks is enabled, insert a callback after a given
   // branch instruction using the given conditional expression.
   void addConditionalCallbacksIfEnabled(Instruction &I, Value *Condition);
+  enum class Edge { Forward, Backward };
+  void addEdgeCallback(Instruction &I, Value *Condition, Edge edgeKind);
 };
 
 class DFSanVisitor : public InstVisitor<DFSanVisitor> {
 public:
   DFSanFunction &DFSF;
+  PostDominatorTree PDT;
 
-  DFSanVisitor(DFSanFunction &DFSF) : DFSF(DFSF) {}
+  DFSanVisitor(DFSanFunction &DFSF) : DFSF(DFSF), PDT(*DFSF.F) {}
 
   const DataLayout &getDataLayout() const {
     return DFSF.F->getParent()->getDataLayout();
@@ -634,6 +640,23 @@ void DFSanFunction::addConditionalCallbacksIfEnabled(Instruction &I,
   IRBuilder<> IRB(&I);
   Value *CondShadow = getShadow(Condition);
   IRB.CreateCall(DFS.DFSanConditionalCallbackFn, {CondShadow});
+}
+
+void DFSanFunction::addEdgeCallback(Instruction &I, Value *Condition,
+                                    Edge edgeKind) {
+  if (!ClConditionalCallbacks) {
+    return;
+  }
+  IRBuilder<> IRB(&I);
+  Value *CondShadow = getShadow(Condition);
+  switch (edgeKind) {
+  case Edge::Forward:
+    IRB.CreateCall(DFS.DFSanForwardEdgeCallbackFn, {CondShadow});
+    break;
+  case Edge::Backward:
+    IRB.CreateCall(DFS.DFSanBackEdgeCallbackFn, {CondShadow});
+    break;
+  }
 }
 
 bool DataFlowSanitizer::doInitialization(Module &M) {
@@ -936,6 +959,10 @@ void DataFlowSanitizer::initializeCallbackFunctions(Module &M) {
       Mod->getOrInsertFunction("__dfsan_cmp_callback", DFSanCmpCallbackFnTy);
   DFSanConditionalCallbackFn = Mod->getOrInsertFunction(
       "__dfsan_conditional_callback", DFSanConditionalCallbackFnTy);
+  DFSanForwardEdgeCallbackFn = Mod->getOrInsertFunction(
+      "__dfsan_conditional_fwd_callback", DFSanConditionalCallbackFnTy);
+  DFSanBackEdgeCallbackFn = Mod->getOrInsertFunction(
+      "__dfsan_conditional_bkwd_callback", DFSanConditionalCallbackFnTy);
 
   if (ClTaskCentricLocalStorage)
       DFSanGetContextStateFn = Mod->getOrInsertFunction("__dfsan_get_context_state", PointerType::get(DFSanContextStateTy, 0));
@@ -992,15 +1019,16 @@ bool DataFlowSanitizer::runOnModule(Module &M) {
         &i != DFSanStoreCallbackFn.getCallee()->stripPointerCasts() &&
         &i != DFSanMemTransferCallbackFn.getCallee()->stripPointerCasts() &&
         &i != DFSanCmpCallbackFn.getCallee()->stripPointerCasts() &&
-        &i != DFSanConditionalCallbackFn.getCallee()->stripPointerCasts()){
-         if (ClTaskCentricLocalStorage) {
-            if (&i != DFSanGetContextStateFn.getCallee()->stripPointerCasts())
-               FnsToInstrument.push_back(&i);
-         }
-         else {
-               FnsToInstrument.push_back(&i);
-         }
-       }
+        &i != DFSanConditionalCallbackFn.getCallee()->stripPointerCasts() &&
+        &i != DFSanForwardEdgeCallbackFn.getCallee()->stripPointerCasts() &&
+        &i != DFSanBackEdgeCallbackFn.getCallee()->stripPointerCasts()) {
+      if (ClTaskCentricLocalStorage) {
+        if (&i != DFSanGetContextStateFn.getCallee()->stripPointerCasts())
+          FnsToInstrument.push_back(&i);
+      } else {
+        FnsToInstrument.push_back(&i);
+      }
+    }
   }
 
   // Give function aliases prefixes when necessary, and build wrappers where the
@@ -1839,11 +1867,24 @@ void DFSanVisitor::visitMemTransferInst(MemTransferInst &I) {
   }
 }
 
+static DFSanFunction::Edge getEdgeKind(BranchInst &BR,
+                                       const PostDominatorTree &PDT) {
+  BasicBlock *BranchBlock = BR.getParent();
+  // Check if any branch targets is post-dominated by this BR. If yes, then
+  // this is a guaranteed back-edge that leads to this branch afterwards.
+  // TODO: Overly conservative?
+  if (llvm::any_of(BR.successors(), [&](BasicBlock *BB) {
+        return PDT.dominates(BranchBlock, BB);
+      }))
+    return DFSanFunction::Edge::Backward;
+  return DFSanFunction::Edge::Forward;
+}
+
 void DFSanVisitor::visitBranchInst(BranchInst &BR) {
   if (!BR.isConditional())
     return;
 
-  DFSF.addConditionalCallbacksIfEnabled(BR, BR.getCondition());
+  DFSF.addEdgeCallback(BR, BR.getCondition(), getEdgeKind(BR, PDT));
 }
 
 void DFSanVisitor::visitSwitchInst(SwitchInst &SW) {
