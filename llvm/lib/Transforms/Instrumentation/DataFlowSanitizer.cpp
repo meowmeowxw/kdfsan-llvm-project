@@ -202,7 +202,8 @@ static cl::opt<bool> ClDebugNonzeroLabels(
 //       dfsan_label data_label, dfsan_label ptr_label);
 //   void __dfsan_store_callback(void *addr, uptr size,
 //       dfsan_label data_label, dfsan_label ptr_label);
-//   void __dfsan_mem_transfer_callback(void *dest, const void *src, uptr size);
+//   void __dfsan_mem_transfer_callback(void *dest, const void *src, uptr size,
+//       dfsan_label dest_label, dfsan_label src_label, dfsan_label size_label);
 //   void __dfsan_cmp_callback(dfsan_label combined_label);
 static cl::opt<bool> ClEventCallbacks(
     "dfsan-event-callbacks",
@@ -719,8 +720,9 @@ bool DataFlowSanitizer::doInitialization(Module &M) {
       { Type::getInt8PtrTy(*Ctx), IntptrTy, ShadowTy, ShadowTy };
   DFSanStoreCallbackFnTy = FunctionType::get(Type::getVoidTy(*Ctx),
       DFSanStoreCallbackArgs, /*isVarArg=*/ false);
-  Type *DFSanMemTransferArgs[3] =
-      { Type::getInt8PtrTy(*Ctx), Type::getInt8PtrTy(*Ctx), IntptrTy };
+  Type *DFSanMemTransferArgs[6] =
+      { Type::getInt8PtrTy(*Ctx), Type::getInt8PtrTy(*Ctx), IntptrTy, ShadowTy,
+        ShadowTy, ShadowTy };
   DFSanMemTransferCallbackFnTy = FunctionType::get(Type::getVoidTy(*Ctx),
       DFSanMemTransferArgs, /*isVarArg=*/false);
   DFSanCmpCallbackFnTy =
@@ -1842,7 +1844,11 @@ void DFSanVisitor::visitMemTransferInst(MemTransferInst &I) {
     Value *Dest = IRB.CreateBitCast(I.getDest(), Int8Ptr);
     Value *Src = IRB.CreateBitCast(I.getSource(), Int8Ptr);
     Value *Size = IRB.CreateZExtOrTrunc(I.getLength(), DFSF.DFS.IntptrTy);
-    IRB.CreateCall(DFSF.DFS.DFSanMemTransferCallbackFn, {Dest, Src, Size});
+    Value *DestShadow = DFSF.getShadow(I.getDest());
+    Value *SrcShadow = DFSF.getShadow(I.getSource());
+    Value *SizeShadow = DFSF.getShadow(I.getLength());
+    IRB.CreateCall(DFSF.DFS.DFSanMemTransferCallbackFn, {Dest, Src, Size,
+        DestShadow, SrcShadow, SizeShadow});
   }
 
   // KDFSAN's memtransfer callback (called above) handles the shadow memory
