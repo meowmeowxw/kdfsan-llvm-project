@@ -126,6 +126,7 @@ public:
         P->getFirst() = EmptyKey;
     } else {
       unsigned NumEntries = getNumEntries();
+      (void)NumEntries;
       for (BucketT *P = getBuckets(), *E = getBucketsEnd(); P != E; ++P) {
         if (!KeyInfoT::isEqual(P->getFirst(), EmptyKey)) {
           if (!KeyInfoT::isEqual(P->getFirst(), TombstoneKey)) {
