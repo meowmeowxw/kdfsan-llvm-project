@@ -405,6 +405,7 @@ class DataFlowSanitizer : public ModulePass {
   FunctionType *DFSanStoreCallbackFnTy;
   FunctionType *DFSanMemTransferCallbackFnTy;
   FunctionType *DFSanCmpCallbackFnTy;
+  FunctionType *DFSanAndCallbackFnTy;
   FunctionCallee DFSanUnionFn;
   FunctionCallee DFSanCheckedUnionFn;
   FunctionCallee DFSanUnionLoadFn;
@@ -420,6 +421,7 @@ class DataFlowSanitizer : public ModulePass {
   FunctionCallee DFSanForwardEdgeCallbackFn;
   FunctionCallee DFSanBackEdgeCallbackFn;
   FunctionCallee DFSanCmpCallbackFn;
+  FunctionCallee DFSanAndCallbackFn;
   MDNode *ColdCallWeights;
 
   /// KDFSAN callback and shadow struct type for arg/ret shadow.
@@ -730,6 +732,9 @@ bool DataFlowSanitizer::doInitialization(Module &M) {
   DFSanConditionalCallbackFnTy =
       FunctionType::get(Type::getVoidTy(*Ctx), ShadowTy,
                         /*isVarArg=*/false);
+  DFSanAndCallbackFnTy =
+      FunctionType::get(Type::getVoidTy(*Ctx), { ShadowTy, ShadowTy },
+                        /*isVarArg=*/false);
 
 
   if (GetArgTLSPtr) {
@@ -965,6 +970,8 @@ void DataFlowSanitizer::initializeCallbackFunctions(Module &M) {
       "__dfsan_conditional_fwd_callback", DFSanConditionalCallbackFnTy);
   DFSanBackEdgeCallbackFn = Mod->getOrInsertFunction(
       "__dfsan_conditional_bkwd_callback", DFSanConditionalCallbackFnTy);
+  DFSanAndCallbackFn =
+      Mod->getOrInsertFunction("__dfsan_and_callback", DFSanAndCallbackFnTy);
 
   if (ClTaskCentricLocalStorage)
       DFSanGetContextStateFn = Mod->getOrInsertFunction("__dfsan_get_context_state", PointerType::get(DFSanContextStateTy, 0));
@@ -1023,7 +1030,8 @@ bool DataFlowSanitizer::runOnModule(Module &M) {
         &i != DFSanCmpCallbackFn.getCallee()->stripPointerCasts() &&
         &i != DFSanConditionalCallbackFn.getCallee()->stripPointerCasts() &&
         &i != DFSanForwardEdgeCallbackFn.getCallee()->stripPointerCasts() &&
-        &i != DFSanBackEdgeCallbackFn.getCallee()->stripPointerCasts()) {
+        &i != DFSanBackEdgeCallbackFn.getCallee()->stripPointerCasts() &&
+        &i != DFSanAndCallbackFn.getCallee()->stripPointerCasts()) {
       if (ClTaskCentricLocalStorage) {
         if (&i != DFSanGetContextStateFn.getCallee()->stripPointerCasts())
           FnsToInstrument.push_back(&i);
@@ -1746,6 +1754,11 @@ void DFSanVisitor::visitUnaryOperator(UnaryOperator &UO) {
 
 void DFSanVisitor::visitBinaryOperator(BinaryOperator &BO) {
   visitOperandShadowInst(BO);
+
+  if (BO.getOpcode() == Instruction::And && ClConditionalCallbacks) {
+    IRBuilder<> IRB(&BO);
+    IRB.CreateCall(DFSF.DFS.DFSanAndCallbackFn, {DFSF.getShadow(BO.getOperand(0)), DFSF.getShadow(BO.getOperand(1))});
+  }
 }
 
 void DFSanVisitor::visitCastInst(CastInst &CI) { visitOperandShadowInst(CI); }
