@@ -954,24 +954,52 @@ void DataFlowSanitizer::initializeCallbackFunctions(Module &M) {
     F->addParamAttr(2, Attribute::ZExt);
     F->addParamAttr(3, Attribute::ZExt);
   }
+
   DFSanStoreCallbackFn = Mod->getOrInsertFunction("__dfsan_store_callback",
       DFSanStoreCallbackFnTy);
   if (Function *F = dyn_cast<Function>(DFSanStoreCallbackFn.getCallee())) {
     F->addParamAttr(2, Attribute::ZExt);
     F->addParamAttr(3, Attribute::ZExt);
   }
+
   DFSanMemTransferCallbackFn = Mod->getOrInsertFunction(
       "__dfsan_mem_transfer_callback", DFSanMemTransferCallbackFnTy);
+  if (Function *F = dyn_cast<Function>(DFSanMemTransferCallbackFn.getCallee())) {
+    F->addParamAttr(3, Attribute::ZExt);
+    F->addParamAttr(4, Attribute::ZExt);
+    F->addParamAttr(5, Attribute::ZExt);
+  }
+
   DFSanCmpCallbackFn =
       Mod->getOrInsertFunction("__dfsan_cmp_callback", DFSanCmpCallbackFnTy);
+  if (Function *F = dyn_cast<Function>(DFSanCmpCallbackFn.getCallee())) {
+    F->addParamAttr(0, Attribute::ZExt);
+  }
+
   DFSanConditionalCallbackFn = Mod->getOrInsertFunction(
       "__dfsan_conditional_callback", DFSanConditionalCallbackFnTy);
+  if (Function *F = dyn_cast<Function>(DFSanConditionalCallbackFn.getCallee())) {
+    F->addParamAttr(0, Attribute::ZExt);
+  }
+
   DFSanForwardEdgeCallbackFn = Mod->getOrInsertFunction(
       "__dfsan_conditional_fwd_callback", DFSanConditionalCallbackFnTy);
+  if (Function *F = dyn_cast<Function>(DFSanForwardEdgeCallbackFn.getCallee())) {
+    F->addParamAttr(0, Attribute::ZExt);
+  }
+
   DFSanBackEdgeCallbackFn = Mod->getOrInsertFunction(
       "__dfsan_conditional_bkwd_callback", DFSanConditionalCallbackFnTy);
+  if (Function *F = dyn_cast<Function>(DFSanBackEdgeCallbackFn.getCallee())) {
+    F->addParamAttr(0, Attribute::ZExt);
+  }
+
   DFSanAndCallbackFn =
       Mod->getOrInsertFunction("__dfsan_and_callback", DFSanAndCallbackFnTy);
+  if (Function *F = dyn_cast<Function>(DFSanAndCallbackFn.getCallee())) {
+    F->addParamAttr(0, Attribute::ZExt);
+    F->addParamAttr(1, Attribute::ZExt);
+  }
 
   if (ClTaskCentricLocalStorage)
       DFSanGetContextStateFn = Mod->getOrInsertFunction("__dfsan_get_context_state", PointerType::get(DFSanContextStateTy, 0));
