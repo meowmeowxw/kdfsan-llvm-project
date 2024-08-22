@@ -733,8 +733,7 @@ bool DataFlowSanitizer::doInitialization(Module &M) {
       FunctionType::get(Type::getVoidTy(*Ctx), ShadowTy,
                         /*isVarArg=*/false);
   DFSanAndCallbackFnTy =
-      FunctionType::get(Type::getVoidTy(*Ctx), { ShadowTy, ShadowTy },
-                        /*isVarArg=*/false);
+      FunctionType::get(ShadowTy, { ShadowTy, ShadowTy }, /*isVarArg=*/false);
 
 
   if (GetArgTLSPtr) {
@@ -997,6 +996,7 @@ void DataFlowSanitizer::initializeCallbackFunctions(Module &M) {
   DFSanAndCallbackFn =
       Mod->getOrInsertFunction("__dfsan_and_callback", DFSanAndCallbackFnTy);
   if (Function *F = dyn_cast<Function>(DFSanAndCallbackFn.getCallee())) {
+    F->addAttribute(AttributeList::ReturnIndex, Attribute::ZExt);
     F->addParamAttr(0, Attribute::ZExt);
     F->addParamAttr(1, Attribute::ZExt);
   }
@@ -1781,12 +1781,13 @@ void DFSanVisitor::visitUnaryOperator(UnaryOperator &UO) {
 }
 
 void DFSanVisitor::visitBinaryOperator(BinaryOperator &BO) {
-  visitOperandShadowInst(BO);
-
   if (BO.getOpcode() == Instruction::And && ClConditionalCallbacks) {
     IRBuilder<> IRB(&BO);
-    IRB.CreateCall(DFSF.DFS.DFSanAndCallbackFn, {DFSF.getShadow(BO.getOperand(0)), DFSF.getShadow(BO.getOperand(1))});
+    CallInst *Call = IRB.CreateCall(DFSF.DFS.DFSanAndCallbackFn, {DFSF.getShadow(BO.getOperand(0)), DFSF.getShadow(BO.getOperand(1))});
+    DFSF.setShadow(&BO, Call);
+    return;
   }
+  visitOperandShadowInst(BO);
 }
 
 void DFSanVisitor::visitCastInst(CastInst &CI) { visitOperandShadowInst(CI); }
