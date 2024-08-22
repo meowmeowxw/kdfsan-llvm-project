@@ -433,7 +433,6 @@ class DataFlowSanitizer : public ModulePass {
   DenseMap<Value *, Function *> UnwrappedFnMap;
   AttrBuilder ReadOnlyNoneAttrs;
   bool DFSanRuntimeShadowMask = false;
-  bool InsertCallbacks;
 
   Value *getShadowAddress(Value *Addr, Instruction *Pos);
   bool isInstrumented(const Function *F);
@@ -690,11 +689,6 @@ bool DataFlowSanitizer::doInitialization(Module &M) {
     DFSanRuntimeShadowMask = true;
   else
     report_fatal_error("unsupported triple");
-
-  InsertCallbacks = ClEnableKdfsan || ClEventCallbacks;
-  if (ClEnableKdfsan && !ClEventCallbacks)
-    report_fatal_error(ClEventCallbacks.ArgStr + " must be set if " +
-        ClEnableKdfsan.ArgStr + " is set\n");
 
   Type *DFSanUnionArgs[2] = { ShadowTy, ShadowTy };
   DFSanUnionFnTy =
@@ -1668,10 +1662,10 @@ void DFSanVisitor::visitLoadInst(LoadInst &LI) {
       DFSF.loadShadow(LI.getPointerOperand(), Size, Alignment.value(), &LI);
 
   Value *PtrShadow;
-  if(ClCombinePointerLabelsOnLoad  || DFSF.DFS.InsertCallbacks)
+  if(ClCombinePointerLabelsOnLoad || ClEventCallbacks)
     PtrShadow = DFSF.getShadow(LI.getPointerOperand());
 
-  if (DFSF.DFS.InsertCallbacks) {
+  if (ClEventCallbacks) {
     IRBuilder<> IRB(&LI);
     Shadow = IRB.CreateCall(DFSF.DFS.DFSanLoadCallbackFn,
         {IRB.CreateBitCast(LI.getPointerOperand(),
@@ -1759,10 +1753,10 @@ void DFSanVisitor::visitStoreInst(StoreInst &SI) {
   Value* Shadow = DFSF.getShadow(SI.getValueOperand());
 
   Value *PtrShadow;
-  if(ClCombinePointerLabelsOnStore  || DFSF.DFS.InsertCallbacks)
+  if(ClCombinePointerLabelsOnStore  || ClEventCallbacks)
     PtrShadow = DFSF.getShadow(SI.getPointerOperand());
 
-  if (DFSF.DFS.InsertCallbacks) {
+  if (ClEventCallbacks) {
     IRBuilder<> IRB(&SI);
     IRB.CreateCall(DFSF.DFS.DFSanStoreCallbackFn,
     {IRB.CreateBitCast(SI.getPointerOperand(),
@@ -1882,7 +1876,7 @@ void DFSanVisitor::visitMemTransferInst(MemTransferInst &I) {
   Type *Int8Ptr = Type::getInt8PtrTy(*DFSF.DFS.Ctx);
   IRBuilder<> IRB(&I);
 
-  if (DFSF.DFS.InsertCallbacks) {
+  if (ClEventCallbacks || ClEnableKdfsan) {
     Value *Dest = IRB.CreateBitCast(I.getDest(), Int8Ptr);
     Value *Src = IRB.CreateBitCast(I.getSource(), Int8Ptr);
     Value *Size = IRB.CreateZExtOrTrunc(I.getLength(), DFSF.DFS.IntptrTy);
