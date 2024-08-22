@@ -716,9 +716,9 @@ bool DataFlowSanitizer::doInitialization(Module &M) {
       { Type::getInt8PtrTy(*Ctx), IntptrTy, ShadowTy, ShadowTy };
   DFSanStoreCallbackFnTy = FunctionType::get(Type::getVoidTy(*Ctx),
       DFSanStoreCallbackArgs, /*isVarArg=*/ false);
-  Type *DFSanMemTransferArgs[6] =
+  Type *DFSanMemTransferArgs[7] =
       { Type::getInt8PtrTy(*Ctx), Type::getInt8PtrTy(*Ctx), IntptrTy, ShadowTy,
-        ShadowTy, ShadowTy };
+        ShadowTy, ShadowTy, Type::getInt1Ty(*Ctx) };
   DFSanMemTransferCallbackFnTy = FunctionType::get(Type::getVoidTy(*Ctx),
       DFSanMemTransferArgs, /*isVarArg=*/false);
   DFSanCmpCallbackFnTy =
@@ -1883,8 +1883,9 @@ void DFSanVisitor::visitMemTransferInst(MemTransferInst &I) {
     Value *DestShadow = DFSF.getShadow(I.getDest());
     Value *SrcShadow = DFSF.getShadow(I.getSource());
     Value *SizeShadow = DFSF.getShadow(I.getLength());
+    Value *PerformPolicies = ConstantInt::get(Type::getInt1Ty(*DFSF.DFS.Ctx), ClEventCallbacks);
     IRB.CreateCall(DFSF.DFS.DFSanMemTransferCallbackFn, {Dest, Src, Size,
-        DestShadow, SrcShadow, SizeShadow});
+        DestShadow, SrcShadow, SizeShadow, PerformPolicies});
   }
 
   // KDFSAN's memtransfer callback (called above) handles the shadow memory
