@@ -1373,6 +1373,10 @@ Value *DFSanFunction::getArgTLS(unsigned Idx, Instruction *Pos) {
 Value *DFSanFunction::getShadow(Value *V) {
   if ((!isa<Argument>(V) && !isa<Instruction>(V)) || ClearTaint)
     return DFS.ZeroShadow;
+  if (Instruction *I = dyn_cast<Instruction>(V)) {
+    if (I->getMetadata("nosanitize"))
+      return DFS.ZeroShadow;
+  }
   Value *&Shadow = ValShadowMap[V];
   if (!Shadow) {
     if (Argument *A = dyn_cast<Argument>(V)) {
@@ -1408,7 +1412,7 @@ Value *DFSanFunction::getShadow(Value *V) {
 }
 
 void DFSanFunction::setShadow(Instruction *I, Value *Shadow) {
-  if (ClearTaint) Shadow = DFS.ZeroShadow;
+  if ((I && I->getMetadata("nosanitize")) || ClearTaint) Shadow = DFS.ZeroShadow;
   assert(!ValShadowMap.count(I));
   assert(Shadow->getType() == DFS.ShadowTy);
   ValShadowMap[I] = Shadow;
