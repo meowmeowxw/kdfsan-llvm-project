@@ -6459,7 +6459,8 @@ static void handleNoSanitizeSpecificAttr(Sema &S, Decl *D,
                                 .Case("no_address_safety_analysis", "address")
                                 .Case("no_sanitize_address", "address")
                                 .Case("no_sanitize_thread", "thread")
-                                .Case("no_sanitize_memory", "memory");
+                                .Case("no_sanitize_memory", "memory")
+                                .Case("no_sanitize_dataflow", "dataflow");
   if (isGlobalVar(D) && SanitizerName != "address")
     S.Diag(D->getLocation(), diag::err_attribute_wrong_decl_type)
         << AL << ExpectedFunction;

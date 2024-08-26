@@ -1257,7 +1257,7 @@ static uint64_t getRawAttributeMask(Attribute::AttrKind Val) {
   case Attribute::NoDuplicate:     return 1ULL << 34;
   case Attribute::StackProtectStrong: return 1ULL << 35;
   case Attribute::SanitizeThread:  return 1ULL << 36;
-  case Attribute::SanitizeMemory:  return 1ULL << 37;
+  case Attribute::SanitizeDataFlow: return 1ULL << 37; // TODO: Add SanitizeMemory back in somehow given the limited number of Attributes?
   case Attribute::NoBuiltin:       return 1ULL << 38;
   case Attribute::Returned:        return 1ULL << 39;
   case Attribute::Cold:            return 1ULL << 40;
@@ -1510,6 +1510,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::SanitizeThread;
   case bitc::ATTR_KIND_SANITIZE_MEMORY:
     return Attribute::SanitizeMemory;
+  case bitc::ATTR_KIND_SANITIZE_DATAFLOW:
+    return Attribute::SanitizeDataFlow;
   case bitc::ATTR_KIND_SPECULATIVE_LOAD_HARDENING:
     return Attribute::SpeculativeLoadHardening;
   case bitc::ATTR_KIND_SWIFT_ERROR:

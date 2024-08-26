@@ -417,6 +417,10 @@ llvm::Function *CodeGenModule::CreateGlobalInitOrCleanUpFunction(
       !isInSanitizerBlacklist(SanitizerKind::KernelMemory, Fn, Loc))
     Fn->addFnAttr(llvm::Attribute::SanitizeMemory);
 
+  if (getLangOpts().Sanitize.has(SanitizerKind::DataFlow) &&
+      !isInSanitizerBlacklist(SanitizerKind::DataFlow, Fn, Loc))
+    Fn->addFnAttr(llvm::Attribute::SanitizeDataFlow);
+
   if (getLangOpts().Sanitize.has(SanitizerKind::SafeStack) &&
       !isInSanitizerBlacklist(SanitizerKind::SafeStack, Fn, Loc))
     Fn->addFnAttr(llvm::Attribute::SafeStack);

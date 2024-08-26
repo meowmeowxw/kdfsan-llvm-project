@@ -2777,7 +2777,8 @@ bool JumpThreadingPass::TryToUnfoldSelectInCurrBB(BasicBlock *BB) {
   // FIXME: either delete it or replace with a valid transform. This issue is
   // not limited to MemorySanitizer (but has only been observed as an MSan false
   // positive in practice so far).
-  if (BB->getParent()->hasFnAttribute(Attribute::SanitizeMemory))
+  if (BB->getParent()->hasFnAttribute(Attribute::SanitizeMemory) ||
+      BB->getParent()->hasFnAttribute(Attribute::SanitizeDataFlow))
     return false;
 
   // If threading this would thread across a loop header, don't thread the edge.
