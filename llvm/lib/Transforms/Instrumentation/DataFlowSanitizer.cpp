@@ -218,6 +218,14 @@ static cl::opt<bool> ClConditionalCallbacks(
     cl::desc("Insert calls to callback functions on conditionals."), cl::Hidden,
     cl::init(false));
 
+// If this flag is true, clear taint for any function's arguments, return
+// values, and memory accesses. Also, do not emit callbacks in the functions.
+// This is useful for avoiding taint explosion.
+static cl::opt<bool> ClClearTaint(
+    "dfsan-clear-taint",
+    cl::desc("Clear taint of function arguments, return value, and memory "
+    "accesses; and do not emit callbacks."), cl::Hidden, cl::init(false));
+
 static StringRef GetGlobalTypeString(const GlobalValue &G) {
   // Types of GlobalVariables are always pointer types.
   Type *GType = G.getValueType();
@@ -478,6 +486,7 @@ struct DFSanFunction {
   std::vector<Value *> NonZeroChecks;
   bool AvoidNewBlocks;
   Instruction *FnPrologueEnd = nullptr;
+  bool ClearTaint;
 
   struct CachedCombinedShadow {
     BasicBlock *Block;
@@ -493,6 +502,7 @@ struct DFSanFunction {
     // FIXME: Need to track down the register allocator issue which causes poor
     // performance in pathological cases with large numbers of basic blocks.
     AvoidNewBlocks = (F->size() > 1000) || ClEnableKdfsan;
+    ClearTaint = !F->hasFnAttribute(Attribute::SanitizeDataFlow) || ClClearTaint;
   }
 
   Value *getArgTLSPtr();
@@ -636,7 +646,7 @@ TransformedFunction DataFlowSanitizer::getCustomFunctionType(FunctionType *T) {
 
 void DFSanFunction::addConditionalCallbacksIfEnabled(Instruction &I,
                                                      Value *Condition) {
-  if (!ClConditionalCallbacks) {
+  if (!ClConditionalCallbacks || ClearTaint) {
     return;
   }
   IRBuilder<> IRB(&I);
@@ -646,7 +656,7 @@ void DFSanFunction::addConditionalCallbacksIfEnabled(Instruction &I,
 
 void DFSanFunction::addEdgeCallback(Instruction &I, Value *Condition,
                                     Edge edgeKind) {
-  if (!ClConditionalCallbacks) {
+  if (!ClConditionalCallbacks || ClearTaint) {
     return;
   }
   IRBuilder<> IRB(&I);
@@ -1361,7 +1371,7 @@ Value *DFSanFunction::getArgTLS(unsigned Idx, Instruction *Pos) {
 }
 
 Value *DFSanFunction::getShadow(Value *V) {
-  if (!isa<Argument>(V) && !isa<Instruction>(V))
+  if ((!isa<Argument>(V) && !isa<Instruction>(V)) || ClearTaint)
     return DFS.ZeroShadow;
   Value *&Shadow = ValShadowMap[V];
   if (!Shadow) {
@@ -1398,6 +1408,7 @@ Value *DFSanFunction::getShadow(Value *V) {
 }
 
 void DFSanFunction::setShadow(Instruction *I, Value *Shadow) {
+  if (ClearTaint) Shadow = DFS.ZeroShadow;
   assert(!ValShadowMap.count(I));
   assert(Shadow->getType() == DFS.ShadowTy);
   ValShadowMap[I] = Shadow;
@@ -1665,7 +1676,7 @@ void DFSanVisitor::visitLoadInst(LoadInst &LI) {
   if(ClCombinePointerLabelsOnLoad || ClEventCallbacks)
     PtrShadow = DFSF.getShadow(LI.getPointerOperand());
 
-  if (ClEventCallbacks) {
+  if (ClEventCallbacks && !DFSF.ClearTaint) {
     IRBuilder<> IRB(&LI);
     Shadow = IRB.CreateCall(DFSF.DFS.DFSanLoadCallbackFn,
         {IRB.CreateBitCast(LI.getPointerOperand(),
@@ -1756,7 +1767,7 @@ void DFSanVisitor::visitStoreInst(StoreInst &SI) {
   if(ClCombinePointerLabelsOnStore  || ClEventCallbacks)
     PtrShadow = DFSF.getShadow(SI.getPointerOperand());
 
-  if (ClEventCallbacks) {
+  if (ClEventCallbacks && !DFSF.ClearTaint) {
     IRBuilder<> IRB(&SI);
     IRB.CreateCall(DFSF.DFS.DFSanStoreCallbackFn,
     {IRB.CreateBitCast(SI.getPointerOperand(),
@@ -1775,7 +1786,7 @@ void DFSanVisitor::visitUnaryOperator(UnaryOperator &UO) {
 }
 
 void DFSanVisitor::visitBinaryOperator(BinaryOperator &BO) {
-  if (BO.getOpcode() == Instruction::And && ClConditionalCallbacks) {
+  if (BO.getOpcode() == Instruction::And && ClConditionalCallbacks && !DFSF.ClearTaint) {
     IRBuilder<> IRB(&BO);
     CallInst *Call = IRB.CreateCall(DFSF.DFS.DFSanAndCallbackFn, {DFSF.getShadow(BO.getOperand(0)), DFSF.getShadow(BO.getOperand(1))});
     DFSF.setShadow(&BO, Call);
@@ -1788,7 +1799,7 @@ void DFSanVisitor::visitCastInst(CastInst &CI) { visitOperandShadowInst(CI); }
 
 void DFSanVisitor::visitCmpInst(CmpInst &CI) {
   Value *CombinedShadow = visitOperandShadowInst(CI);
-  if (ClEventCallbacks) {
+  if (ClEventCallbacks && !DFSF.ClearTaint) {
     IRBuilder<> IRB(&CI);
     IRB.CreateCall(DFSF.DFS.DFSanCmpCallbackFn, CombinedShadow);
   }
@@ -1875,6 +1886,14 @@ void DFSanVisitor::visitMemSetInst(MemSetInst &I) {
 void DFSanVisitor::visitMemTransferInst(MemTransferInst &I) {
   Type *Int8Ptr = Type::getInt8PtrTy(*DFSF.DFS.Ctx);
   IRBuilder<> IRB(&I);
+
+  if (DFSF.ClearTaint) {
+    IRB.CreateCall(DFSF.DFS.DFSanSetLabelFn,
+        {DFSF.DFS.ZeroShadow,
+        IRB.CreateBitCast(I.getDest(), Type::getInt8PtrTy(*DFSF.DFS.Ctx)),
+        IRB.CreateZExtOrTrunc(I.getLength(), DFSF.DFS.IntptrTy)});
+    return;
+  }
 
   if (ClEventCallbacks || ClEnableKdfsan) {
     Value *Dest = IRB.CreateBitCast(I.getDest(), Int8Ptr);
