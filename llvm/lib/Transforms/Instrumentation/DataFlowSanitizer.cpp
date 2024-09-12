@@ -200,7 +200,7 @@ static cl::opt<bool> ClDebugNonzeroLabels(
 // following callback functions:
 //   dfsan_label __dfsan_load_callback(void *addr, uptr size,
 //       dfsan_label data_label, dfsan_label ptr_label);
-//   void __dfsan_store_callback(void *addr, uptr size,
+//   void __dfsan_store_callback(u64 data, void *addr, uptr size,
 //       dfsan_label data_label, dfsan_label ptr_label);
 //   void __dfsan_mem_transfer_callback(void *dest, const void *src, uptr size,
 //       dfsan_label dest_label, dfsan_label src_label, dfsan_label size_label);
@@ -722,8 +722,9 @@ bool DataFlowSanitizer::doInitialization(Module &M) {
       { Type::getInt8PtrTy(*Ctx), IntptrTy, ShadowTy, ShadowTy };
   DFSanLoadCallbackFnTy = FunctionType::get(ShadowTy,
       DFSanLoadCallbackArgs, /*isVarArg=*/ false);
-  Type *DFSanStoreCallbackArgs[4] =
-      { Type::getInt8PtrTy(*Ctx), IntptrTy, ShadowTy, ShadowTy };
+  Type *DFSanStoreCallbackArgs[5] =
+      { Type::getInt64Ty(*Ctx), Type::getInt8PtrTy(*Ctx), IntptrTy, ShadowTy,
+        ShadowTy };
   DFSanStoreCallbackFnTy = FunctionType::get(Type::getVoidTy(*Ctx),
       DFSanStoreCallbackArgs, /*isVarArg=*/ false);
   Type *DFSanMemTransferArgs[6] =
@@ -961,8 +962,8 @@ void DataFlowSanitizer::initializeCallbackFunctions(Module &M) {
   DFSanStoreCallbackFn = Mod->getOrInsertFunction("__dfsan_store_callback",
       DFSanStoreCallbackFnTy);
   if (Function *F = dyn_cast<Function>(DFSanStoreCallbackFn.getCallee())) {
-    F->addParamAttr(2, Attribute::ZExt);
     F->addParamAttr(3, Attribute::ZExt);
+    F->addParamAttr(4, Attribute::ZExt);
   }
 
   DFSanMemTransferCallbackFn = Mod->getOrInsertFunction(
@@ -1758,14 +1759,16 @@ void DFSanFunction::storeShadow(Value *Addr, uint64_t Size, Align Alignment,
 }
 
 void DFSanVisitor::visitStoreInst(StoreInst &SI) {
+  Value *StoredVal = SI.getValueOperand();
+
   auto &DL = SI.getModule()->getDataLayout();
-  uint64_t Size = DL.getTypeStoreSize(SI.getValueOperand()->getType());
+  uint64_t Size = DL.getTypeStoreSize(StoredVal->getType());
   if (Size == 0)
     return;
 
   const Align Alignment = ClPreserveAlignment ? SI.getAlign() : Align(1);
 
-  Value* Shadow = DFSF.getShadow(SI.getValueOperand());
+  Value* Shadow = DFSF.getShadow(StoredVal);
 
   Value *PtrShadow;
   if(ClCombinePointerLabelsOnStore  || ClEventCallbacks)
@@ -1773,8 +1776,14 @@ void DFSanVisitor::visitStoreInst(StoreInst &SI) {
 
   if (ClEventCallbacks && !DFSF.ClearTaint) {
     IRBuilder<> IRB(&SI);
+
+    Value *ValArg;
+    if (Size > 8) ValArg = IRB.getInt64(0); // If size > 8 bytes, pass 0
+    else if (StoredVal->getType()->isPointerTy()) ValArg = IRB.CreatePtrToInt(StoredVal, IRB.getInt64Ty()); // Convert pointer to Int64
+    else ValArg = IRB.CreateZExtOrTrunc(StoredVal, IRB.getInt64Ty()); // ZExt/Trunc other types
+
     IRB.CreateCall(DFSF.DFS.DFSanStoreCallbackFn,
-    {IRB.CreateBitCast(SI.getPointerOperand(),
+    {ValArg, IRB.CreateBitCast(SI.getPointerOperand(),
     Type::getInt8PtrTy(*DFSF.DFS.Ctx)),
     ConstantInt::get(DFSF.DFS.IntptrTy, Size), Shadow, PtrShadow});
   }
