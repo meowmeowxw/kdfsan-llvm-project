@@ -118,6 +118,7 @@ void initializeConstantHoistingLegacyPassPass(PassRegistry&);
 void initializeConstantMergeLegacyPassPass(PassRegistry&);
 void initializeConstraintEliminationPass(PassRegistry &);
 void initializeControlHeightReductionLegacyPassPass(PassRegistry&);
+void initializeCountInstrsPass(PassRegistry&);
 void initializeCorrelatedValuePropagationPass(PassRegistry&);
 void initializeCostModelAnalysisPass(PassRegistry&);
 void initializeCrossDSOCFIPass(PassRegistry&);

@@ -1223,6 +1223,9 @@ void TargetPassConfig::addMachinePasses() {
 
   // Add passes that directly emit MI after all other MI passes.
   addPreEmitPass2();
+  
+  // enable this to count x86 instructions
+  // addPass(&CountInstrsID, false);
 
   // Insert pseudo probe annotation for callsite profiling
   if (TM->Options.PseudoProbeForProfiling)
